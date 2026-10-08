@@ -1,0 +1,46 @@
+<!doctype html>
+<html lang="en">
+<head>
+    <meta charset="utf-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1" />
+    <title>WebGPU Workshop</title>
+    <style>
+        html, body { margin: 0; height: 100%; background: #141417; color: #ddd; font-family: system-ui, sans-serif; overflow: hidden; }
+        canvas { display: block; width: 100vw; height: 100vh; outline: none; }
+        #picker { padding: 2rem; line-height: 1.8; }
+        #picker a { color: #8ab4ff; }
+        #message { position: fixed; inset: auto 1rem 1rem 1rem; padding: 1rem; background: #3a1414; color: #ffb4b4;
+                   font-family: ui-monospace, monospace; white-space: pre-wrap; max-height: 50vh; overflow: auto; }
+    </style>
+</head>
+<body>
+    <div id="picker" hidden>
+        <h1>WebGPU Workshop</h1>
+        <p>Pick an example:</p>
+        <ul>
+            <li><a href="?example=template">template</a></li>
+            <li><a href="?example=gravity">gravity</a></li>
+            <li><a href="?example=timeseries">timeseries</a></li>
+            <li><a href="?example=graph">graph</a></li>
+            <li><a href="?example=boids">boids</a></li>
+            <li><a href="?example=life">life</a></li>
+            <li><a href="?example=volume">volume</a></li>
+        </ul>
+    </div>
+    <canvas id="canvas" tabindex="0"></canvas>
+    <pre id="message" hidden></pre>
+    <script type="module">
+        if (!new URLSearchParams(location.search).has("example")) {
+            document.getElementById("picker").hidden = false;
+            document.getElementById("canvas").hidden = true;
+        } else if (!navigator.gpu) {
+            const message = document.getElementById("message");
+            message.textContent = "This browser does not support WebGPU. Try a recent Chrome, Edge or Safari.";
+            message.hidden = false;
+        } else {
+            const { default: init } = await import("./pkg/webgpu_workshop.js");
+            await init();
+        }
+    </script>
+</body>
+</html>
