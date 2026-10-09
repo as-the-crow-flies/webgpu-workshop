@@ -242,6 +242,12 @@ impl<A: App> Runner<A> {
         #[cfg(target_arch = "wasm32")]
         if self.state.is_none() {
             self.state = self.loading.borrow_mut().take();
+            // Resize events that arrived while loading were dropped (there was no
+            // state yet), so the surface may still have the canvas's initial size.
+            if let Some(state) = &mut self.state {
+                let size = state.window.inner_size();
+                state.resize(size.width, size.height);
+            }
         }
         let Some(state) = &mut self.state else { return };
         let _ = state.egui.on_window_event(&state.window, &event);
