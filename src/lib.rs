@@ -11,6 +11,11 @@ extern crate self as webgpu_workshop;
 mod app;
 mod camera;
 mod npy;
+// The same preprocessing `build.rs` uses, so shaders can be reloaded at runtime.
+#[cfg(not(target_arch = "wasm32"))]
+#[allow(dead_code)] // `compile` is only used by build.rs
+#[path = "../build/shader.rs"]
+mod shader;
 #[cfg(target_arch = "wasm32")]
 mod web;
 
@@ -79,20 +84,84 @@ pub struct Context {
     pub time_scale: f32,
 
     pub(crate) errors: Arc<Mutex<Vec<String>>>,
+    /// Native only: the shader files loaded so far, for hot reloading.
+    #[cfg(not(target_arch = "wasm32"))]
+    pub(crate) watch: Mutex<Watch>,
+}
+
+/// Every shader file `App::new` loaded (including imports) and when it last changed.
+/// When one changes, the framework calls `App::new` again (see `State::hot_reload`).
+#[cfg(not(target_arch = "wasm32"))]
+#[derive(Default)]
+pub(crate) struct Watch {
+    pub files: std::collections::HashMap<String, Option<std::time::SystemTime>>,
+    /// A shader failed to compile since this was last reset.
+    pub failed: bool,
+}
+
+/// When `path` (relative to the crate root) was last modified.
+#[cfg(not(target_arch = "wasm32"))]
+pub(crate) fn modified(path: &str) -> Option<std::time::SystemTime> {
+    let root = std::path::Path::new(env!("CARGO_MANIFEST_DIR"));
+    std::fs::metadata(root.join(path))
+        .and_then(|metadata| metadata.modified())
+        .ok()
 }
 
 impl Context {
     /// Load a shader by its path relative to the crate root, e.g. `"examples/boids/render.wgsl"`.
     /// The shader was checked and its `#import`s resolved when you ran `cargo build`.
+    ///
+    /// Natively the file is read again from disk, and when it (or one of its imports)
+    /// changes, `App::new` is called again: edit a shader and see the result right away.
     pub fn shader(&self, path: &str) -> wgpu::ShaderModule {
-        let Some((_, source)) = SHADERS.iter().find(|(p, _)| *p == path) else {
-            panic!("no shader {path:?} (paths are relative to the crate root, e.g. \"examples/boids/render.wgsl\")");
-        };
+        let source = self.shader_source(path);
         self.device
             .create_shader_module(wgpu::ShaderModuleDescriptor {
                 label: Some(path),
-                source: wgpu::ShaderSource::Wgsl((*source).into()),
+                source: wgpu::ShaderSource::Wgsl(source.into()),
             })
+    }
+
+    /// The shader as it was when you ran `cargo build`.
+    fn built_shader(path: &str) -> &'static str {
+        let Some((_, source)) = SHADERS.iter().find(|(p, _)| *p == path) else {
+            panic!("no shader {path:?} (paths are relative to the crate root, e.g. \"examples/boids/render.wgsl\")");
+        };
+        source
+    }
+
+    #[cfg(target_arch = "wasm32")]
+    fn shader_source(&self, path: &str) -> String {
+        Self::built_shader(path).to_string()
+    }
+
+    /// Read the shader from disk and watch its files. If it doesn't compile, show the
+    /// error and fall back to the version from `cargo build`.
+    #[cfg(not(target_arch = "wasm32"))]
+    fn shader_source(&self, path: &str) -> String {
+        let root = std::path::Path::new(env!("CARGO_MANIFEST_DIR"));
+        let mut watch = self.watch.lock().unwrap();
+        watch
+            .files
+            .entry(path.to_string())
+            .or_insert_with(|| modified(path));
+        let result = shader::flatten(root, path).and_then(|flat| {
+            for file in &flat.files {
+                watch.files.entry(file.clone()).or_insert_with(|| modified(file));
+            }
+            flat.validate()?;
+            Ok(flat.source)
+        });
+        match result {
+            Ok(source) => source,
+            Err(error) => {
+                watch.failed = true;
+                drop(watch);
+                self.error(error);
+                Self::built_shader(path).to_string()
+            }
+        }
     }
 
     /// Show an error message in the window (and the log).

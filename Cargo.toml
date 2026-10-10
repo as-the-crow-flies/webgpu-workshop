@@ -22,6 +22,7 @@ web-time = "1"
 [target.'cfg(not(target_arch = "wasm32"))'.dependencies]
 egui-winit = { version = "0.36", features = ["clipboard", "wayland", "x11"] }
 env_logger = "0.11"
+naga = { version = "30", features = ["wgsl-in"] } # checks shaders when they are hot reloaded
 pollster = "0.4"
 
 [target.'cfg(target_arch = "wasm32")'.dependencies]

@@ -197,6 +197,8 @@ impl<A: App> Runner<A> {
             paused: false,
             time_scale: 1.0,
             errors,
+            #[cfg(not(target_arch = "wasm32"))]
+            watch: Default::default(),
         };
         update_globals(&mut ctx);
 
@@ -317,6 +319,9 @@ impl<A: App> State<A> {
 
     /// One frame: UI -> camera -> globals -> `update` (compute) -> `render` (your passes) -> UI on top.
     fn frame(&mut self) {
+        #[cfg(not(target_arch = "wasm32"))]
+        self.hot_reload();
+
         // Get the texture to draw into first. If there is none, skip the whole
         // frame *before* writing any buffers: writes are only freed by a submit.
         let surface_texture = match self.surface.get_current_texture() {
@@ -451,6 +456,49 @@ impl<A: App> State<A> {
         ctx.mouse.left_pressed = false;
         ctx.mouse.left_released = false;
         self.window.request_redraw();
+    }
+}
+
+#[cfg(not(target_arch = "wasm32"))]
+impl<A: App> State<A> {
+    /// When a shader file changed on disk, call `App::new` again (keeping the camera).
+    /// If that fails (a shader doesn't compile, a wgpu validation error, a panic), the
+    /// previous app keeps running and the error is shown in the window.
+    fn hot_reload(&mut self) {
+        let ctx = &mut self.ctx;
+        let mut changed = false;
+        for (path, time) in &mut ctx.watch.lock().unwrap().files {
+            let now = crate::modified(path);
+            if *time != now {
+                *time = now;
+                changed = true;
+            }
+        }
+        if !changed {
+            return;
+        }
+
+        // Errors from before the reload are probably about the old shaders.
+        ctx.errors.lock().unwrap().clear();
+        ctx.watch.lock().unwrap().failed = false;
+        let camera = ctx.camera.clone();
+        let scope = ctx.device.push_error_scope(wgpu::ErrorFilter::Validation);
+        let app = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
+            pollster::block_on(A::new(ctx))
+        }));
+        let gpu_error = pollster::block_on(scope.pop());
+        ctx.camera = camera;
+
+        let failed = ctx.watch.lock().unwrap().failed;
+        match (app, gpu_error) {
+            (Ok(app), None) if !failed => {
+                self.app = app;
+                log::info!("shaders reloaded");
+            }
+            (Ok(_), Some(error)) => ctx.error(error.to_string()),
+            (Ok(_), None) => {} // the shader error was already shown
+            (Err(_), _) => ctx.error("App::new panicked while reloading (see the terminal)"),
+        }
     }
 }
 

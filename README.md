@@ -467,6 +467,15 @@ error: invalid field accessor `colour`
    |                    ^^^^^^ invalid accessor
 ```
 
+## Hot reloading
+
+While the app runs (natively), save a `.wgsl` file and the app reloads: `App::new` is
+called again with the new shaders. The camera stays where it is; everything else (sliders,
+simulation state) starts over. If the new shader doesn't compile, the error is shown in the
+window and the previous version keeps running until you fix it.
+
+Changes to Rust code still need a restart.
+
 ## Running in the browser
 
 The web build contains all examples in one `.wasm` file. You need
@@ -483,4 +492,4 @@ python3 -m http.server 8000
 
 Then open <http://localhost:8000/?example=graph>. Files passed to `load_npy` are downloaded from
 the same server, so keep them inside the repository. The web build uses the shaders from build
-time; rebuild to see shader changes.
+time (no hot reloading); rebuild to see shader changes.
