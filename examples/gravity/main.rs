@@ -129,7 +129,11 @@ impl App for Gravity {
                 entries: &[
                     buffer(0, wgpu::ShaderStages::VERTEX_FRAGMENT, Uniform),
                     buffer(1, wgpu::ShaderStages::VERTEX_FRAGMENT, Uniform),
-                    buffer(2, wgpu::ShaderStages::VERTEX, Storage { read_only: true }),
+                    buffer(
+                        2,
+                        wgpu::ShaderStages::VERTEX_FRAGMENT,
+                        Storage { read_only: true },
+                    ),
                 ],
             });
         // The render pipeline: render.wgsl plus every fixed setting for drawing with it.
@@ -231,6 +235,11 @@ impl App for Gravity {
             render_pipeline,
             render_bind_groups,
         }
+    }
+
+    // Keep the slider values when a shader is hot reloaded.
+    fn reloaded(&mut self, old: &Self) {
+        self.params = old.params;
     }
 
     // ---------------------------------------------------------------

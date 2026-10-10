@@ -23,7 +23,8 @@ struct Params {
     spring: f32,         // stiffness of an edge
     damping: f32,        // fraction of the velocity kept per frame
     gravity: f32,        // pull towards the origin
-    line_width: f32,     // edges, in pixels
+    edge_radius: f32,    // thickness of the edge cylinders
+    node_radius: f32,    // scales the radius of every node (from nodes.npy: larger for more edges)
     flat: u32,           // 1: keep the layout in the plane z = 0
 }
 

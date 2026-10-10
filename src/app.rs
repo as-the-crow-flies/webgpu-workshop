@@ -461,7 +461,8 @@ impl<A: App> State<A> {
 
 #[cfg(not(target_arch = "wasm32"))]
 impl<A: App> State<A> {
-    /// When a shader file changed on disk, call `App::new` again (keeping the camera).
+    /// When a shader file changed on disk, call `App::new` again (keeping the camera,
+    /// and whatever `App::reloaded` copies over from the old app).
     /// If that fails (a shader doesn't compile, a wgpu validation error, a panic), the
     /// previous app keeps running and the error is shown in the window.
     fn hot_reload(&mut self) {
@@ -491,7 +492,8 @@ impl<A: App> State<A> {
 
         let failed = ctx.watch.lock().unwrap().failed;
         match (app, gpu_error) {
-            (Ok(app), None) if !failed => {
+            (Ok(mut app), None) if !failed => {
+                app.reloaded(&self.app);
                 self.app = app;
                 log::info!("shaders reloaded");
             }

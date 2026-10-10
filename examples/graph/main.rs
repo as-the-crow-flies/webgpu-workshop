@@ -7,13 +7,21 @@
 //! Pipelines:
 //!   pick.wgsl          finds the node under the mouse when the left button goes down
 //!   simulate.wgsl      forces (ping-pong), and moves the picked node to the mouse
-//!   render_edges.wgsl  one anti-aliased line per edge
+//!   render_edges.wgsl  one cylinder impostor per edge
 //!   render_nodes.wgsl  one sphere impostor per node
+//!
+//! Anti-aliasing: 4x MSAA. The impostors are flat quads that discard the pixels they miss,
+//! and write their own depth. With plain MSAA the fragment shader runs once per pixel, so
+//! that would decide all 4 samples at once and give jagged outlines. Both shaders take
+//! `@builtin(sample_index)`, which makes them run once per sample instead.
 
 use webgpu_workshop::{bytemuck, egui, glam, load_npy, wgpu, App, Camera, Context};
 use wgpu::util::DeviceExt;
 
 const NO_PICK: u32 = u32::MAX;
+/// MSAA samples per pixel. WebGPU supports 1 and 4 everywhere; render_edges.wgsl and
+/// render_nodes.wgsl use the positions of the 4 samples (`sample_position_4x`).
+const SAMPLES: u32 = 4;
 
 /// The sliders. Must have the same layout as `struct Params` in types.wgsl.
 #[repr(C)]
@@ -24,7 +32,8 @@ struct Params {
     spring: f32,
     damping: f32,
     gravity: f32,
-    line_width: f32,
+    edge_radius: f32,
+    node_radius: f32,
     flat: u32,
 }
 
@@ -40,6 +49,8 @@ pub struct Graph {
     pick_buffer: wgpu::Buffer,
     /// Which of the two node buffers holds the latest positions (0 or 1).
     current: usize,
+    /// Simulation steps per frame: more steps, faster convergence (each step is just as small).
+    steps_per_frame: u32,
 
     /// One pipeline per shader, and its bind groups (two for ping-pong).
     pick_pipeline: wgpu::ComputePipeline,
@@ -50,6 +61,12 @@ pub struct Graph {
     edges_bind_groups: [wgpu::BindGroup; 2],
     nodes_pipeline: wgpu::RenderPipeline,
     nodes_bind_groups: [wgpu::BindGroup; 2],
+
+    /// The multisampled color and depth textures we draw into (see `create_msaa_targets`),
+    /// and the window size they were made for.
+    msaa_color: wgpu::TextureView,
+    msaa_depth: wgpu::TextureView,
+    msaa_size: [u32; 2],
 }
 
 impl App for Graph {
@@ -98,7 +115,8 @@ impl App for Graph {
             spring: 2.0,
             damping: 0.9,
             gravity: 0.3,
-            line_width: 1.5,
+            edge_radius: 0.002,
+            node_radius: 1.0,
             flat: 0,
         };
         let params_buffer = ctx
@@ -139,13 +157,14 @@ impl App for Graph {
                     entries,
                 })
         };
-        // pick.wgsl: globals, nodes, pick (atomic)
+        // pick.wgsl: globals, nodes, pick (atomic), params
         let pick_layout = layout(
             "pick",
             &[
                 buffer(0, S::COMPUTE, Uniform),
                 buffer(1, S::COMPUTE, read),
                 buffer(2, S::COMPUTE, write),
+                buffer(3, S::COMPUTE, Uniform),
             ],
         );
         // simulate.wgsl: globals, params, ping, pong, edges, pick
@@ -170,13 +189,14 @@ impl App for Graph {
                 buffer(3, S::VERTEX, read),
             ],
         );
-        // render_nodes.wgsl: globals, nodes, pick
+        // render_nodes.wgsl: globals, nodes, pick, params
         let nodes_layout = layout(
             "nodes",
             &[
                 buffer(0, S::VERTEX_FRAGMENT, Uniform),
                 buffer(1, S::VERTEX_FRAGMENT, read),
                 buffer(2, S::VERTEX_FRAGMENT, read),
+                buffer(3, S::VERTEX_FRAGMENT, Uniform),
             ],
         );
 
@@ -201,12 +221,8 @@ impl App for Graph {
                     cache: None,
                 })
         };
-        // Both render pipelines test depth; only the nodes write it,
-        // so edges are hidden behind nodes.
-        let render = |label,
-                      shader: &wgpu::ShaderModule,
-                      layout: &wgpu::BindGroupLayout,
-                      depth_write: bool| {
+        // Both render pipelines test and write depth: spheres and cylinders hide each other.
+        let render = |label, shader: &wgpu::ShaderModule, layout: &wgpu::BindGroupLayout| {
             ctx.device
                 .create_render_pipeline(&wgpu::RenderPipelineDescriptor {
                     // Name shown in error messages.
@@ -233,13 +249,16 @@ impl App for Graph {
                     // The depth test: only keep a fragment if it is closer than what was drawn there.
                     depth_stencil: Some(wgpu::DepthStencilState {
                         format: ctx.depth_format,
-                        depth_write_enabled: Some(depth_write),
+                        depth_write_enabled: Some(true),
                         depth_compare: Some(wgpu::CompareFunction::Less),
                         stencil: Default::default(),
                         bias: Default::default(),
                     }),
-                    // Multisampling: off (1 sample per pixel).
-                    multisample: Default::default(),
+                    // Multisampling: SAMPLES samples per pixel (the textures in `create_msaa_targets`).
+                    multisample: wgpu::MultisampleState {
+                        count: SAMPLES,
+                        ..Default::default()
+                    },
                     // The fragment stage: runs once per covered pixel, returns its color.
                     fragment: Some(wgpu::FragmentState {
                         module: shader,
@@ -260,8 +279,8 @@ impl App for Graph {
         // The four pipelines.
         let pick_pipeline = compute("pick", &pick_shader, &pick_layout);
         let simulate_pipeline = compute("simulate", &simulate_shader, &simulate_layout);
-        let edges_pipeline = render("edges", &edges_shader, &edges_layout, false);
-        let nodes_pipeline = render("nodes", &nodes_shader, &nodes_layout, true);
+        let edges_pipeline = render("edges", &edges_shader, &edges_layout);
+        let nodes_pipeline = render("nodes", &nodes_shader, &nodes_layout);
 
         // ---------------------------------------------------------------
         // Step 4: Create a Bind Group (for each pipeline; two for ping-pong)
@@ -273,7 +292,12 @@ impl App for Graph {
             bind_group(
                 &ctx.device,
                 &pick_layout,
-                &[(0, globals), (1, &nodes[i]), (2, &pick_buffer)],
+                &[
+                    (0, globals),
+                    (1, &nodes[i]),
+                    (2, &pick_buffer),
+                    (3, &params_buffer),
+                ],
             )
         });
         let simulate_bind_groups = [0, 1].map(|i| {
@@ -306,9 +330,17 @@ impl App for Graph {
             bind_group(
                 &ctx.device,
                 &nodes_layout,
-                &[(0, globals), (1, &nodes[i]), (2, &pick_buffer)],
+                &[
+                    (0, globals),
+                    (1, &nodes[i]),
+                    (2, &pick_buffer),
+                    (3, &params_buffer),
+                ],
             )
         });
+
+        // The multisampled textures to draw into; made again when the window is resized.
+        let (msaa_color, msaa_depth) = create_msaa_targets(ctx);
 
         // The left mouse button drags nodes, so the camera uses the right button.
         ctx.camera = Camera::orbit(glam::Vec3::ZERO, 3.0);
@@ -321,6 +353,7 @@ impl App for Graph {
             edge_count,
             pick_buffer,
             current: 0,
+            steps_per_frame: 10,
             pick_pipeline,
             pick_bind_groups,
             simulate_pipeline,
@@ -329,7 +362,16 @@ impl App for Graph {
             edges_bind_groups,
             nodes_pipeline,
             nodes_bind_groups,
+            msaa_color,
+            msaa_depth,
+            msaa_size: ctx.size,
         }
+    }
+
+    // Keep the slider values when a shader is hot reloaded.
+    fn reloaded(&mut self, old: &Self) {
+        self.params = old.params;
+        self.steps_per_frame = old.steps_per_frame;
     }
 
     // ---------------------------------------------------------------
@@ -352,11 +394,15 @@ impl App for Graph {
             pass.dispatch_workgroups(workgroups, 1, 1);
         }
 
+        // Several steps per frame, ping-ponging between the node buffers. Each dispatch sees
+        // what the previous one wrote: WebGPU finishes one dispatch before starting the next.
         let mut pass = encoder.begin_compute_pass(&Default::default());
         pass.set_pipeline(&self.simulate_pipeline);
-        pass.set_bind_group(0, &self.simulate_bind_groups[self.current], &[]);
-        pass.dispatch_workgroups(workgroups, 1, 1);
-        self.current = 1 - self.current;
+        for _ in 0..self.steps_per_frame {
+            pass.set_bind_group(0, &self.simulate_bind_groups[self.current], &[]);
+            pass.dispatch_workgroups(workgroups, 1, 1);
+            self.current = 1 - self.current;
+        }
     }
 
     fn render(
@@ -364,34 +410,43 @@ impl App for Graph {
         ctx: &Context,
         encoder: &mut wgpu::CommandEncoder,
         color: &wgpu::TextureView,
-        depth: &wgpu::TextureView,
+        _depth: &wgpu::TextureView,
     ) {
         ctx.queue
             .write_buffer(&self.params_buffer, 0, bytemuck::bytes_of(&self.params));
 
+        // The window changed size: new multisampled textures of the new size.
+        if ctx.size != self.msaa_size {
+            (self.msaa_color, self.msaa_depth) = create_msaa_targets(ctx);
+            self.msaa_size = ctx.size;
+        }
+
+        // Draw into the multisampled textures; at the end of the pass, the samples of each
+        // pixel are averaged into the window (`resolve_target`). The samples themselves are
+        // not needed after that (`Discard`).
         let mut pass = encoder.begin_render_pass(&wgpu::RenderPassDescriptor {
             label: Some("render"),
             color_attachments: &[Some(wgpu::RenderPassColorAttachment {
-                view: color,
-                resolve_target: None,
+                view: &self.msaa_color,
+                resolve_target: Some(color),
                 depth_slice: None,
                 ops: wgpu::Operations {
                     load: wgpu::LoadOp::Clear(wgpu::Color::BLACK),
-                    store: wgpu::StoreOp::Store,
+                    store: wgpu::StoreOp::Discard,
                 },
             })],
             depth_stencil_attachment: Some(wgpu::RenderPassDepthStencilAttachment {
-                view: depth,
+                view: &self.msaa_depth,
                 depth_ops: Some(wgpu::Operations {
                     load: wgpu::LoadOp::Clear(1.0),
-                    store: wgpu::StoreOp::Store,
+                    store: wgpu::StoreOp::Discard,
                 }),
                 stencil_ops: None,
             }),
             ..Default::default()
         });
 
-        // Edges first, then the nodes on top.
+        // Edges and nodes; the depth test sorts out which is in front.
         pass.set_pipeline(&self.edges_pipeline);
         pass.set_bind_group(0, &self.edges_bind_groups[self.current], &[]);
         pass.draw(0..6, 0..self.edge_count);
@@ -407,12 +462,14 @@ impl App for Graph {
             "{} nodes, {} edges",
             self.node_count, self.edge_count
         ));
+        ui.add(egui::Slider::new(&mut self.steps_per_frame, 1..=32).text("steps per frame"));
         ui.add(egui::Slider::new(&mut p.repulsion, 0.0..=0.01).text("repulsion"));
         ui.add(egui::Slider::new(&mut p.spring_length, 0.0..=0.5).text("spring length"));
         ui.add(egui::Slider::new(&mut p.spring, 0.0..=10.0).text("spring"));
         ui.add(egui::Slider::new(&mut p.damping, 0.5..=1.0).text("damping"));
         ui.add(egui::Slider::new(&mut p.gravity, 0.0..=2.0).text("gravity"));
-        ui.add(egui::Slider::new(&mut p.line_width, 0.5..=5.0).text("edge width (px)"));
+        ui.add(egui::Slider::new(&mut p.edge_radius, 0.001..=0.02).text("edge radius"));
+        ui.add(egui::Slider::new(&mut p.node_radius, 0.1..=3.0).text("node radius"));
         let mut flat = p.flat == 1;
         ui.checkbox(&mut flat, "2D layout");
         p.flat = flat as u32;
@@ -460,4 +517,30 @@ fn bind_group(
 #[allow(dead_code)]
 fn main() {
     webgpu_workshop::run::<Graph>();
+}
+
+/// The multisampled color and depth textures for the window's current size.
+fn create_msaa_targets(ctx: &Context) -> (wgpu::TextureView, wgpu::TextureView) {
+    let texture = |label, format| {
+        ctx.device
+            .create_texture(&wgpu::TextureDescriptor {
+                label: Some(label),
+                size: wgpu::Extent3d {
+                    width: ctx.size[0].max(1),
+                    height: ctx.size[1].max(1),
+                    depth_or_array_layers: 1,
+                },
+                mip_level_count: 1,
+                sample_count: SAMPLES,
+                dimension: wgpu::TextureDimension::D2,
+                format,
+                usage: wgpu::TextureUsages::RENDER_ATTACHMENT,
+                view_formats: &[],
+            })
+            .create_view(&Default::default())
+    };
+    (
+        texture("msaa color", ctx.surface_format),
+        texture("msaa depth", ctx.depth_format),
+    )
 }

@@ -105,7 +105,7 @@ impl App for Template {
                         // @binding(2) var<storage, read> points
                         wgpu::BindGroupLayoutEntry {
                             binding: 2,
-                            visibility: wgpu::ShaderStages::VERTEX,
+                            visibility: wgpu::ShaderStages::VERTEX_FRAGMENT,
                             ty: wgpu::BindingType::Buffer {
                                 ty: wgpu::BufferBindingType::Storage { read_only: true },
                                 has_dynamic_offset: false,
@@ -211,6 +211,11 @@ impl App for Template {
             pipeline,
             bind_group,
         }
+    }
+
+    // Keep the slider values when a shader is hot reloaded.
+    fn reloaded(&mut self, old: &Self) {
+        self.params = old.params;
     }
 
     // ---------------------------------------------------------------

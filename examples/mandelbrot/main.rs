@@ -122,6 +122,11 @@ impl App for Mandelbrot {
         }
     }
 
+    // Keep the slider values when a shader is hot reloaded.
+    fn reloaded(&mut self, old: &Self) {
+        self.params = old.params;
+    }
+
     // ---------------------------------------------------------------
     // Step 5: Draw!
     // ---------------------------------------------------------------

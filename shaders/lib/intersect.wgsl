@@ -150,9 +150,10 @@ fn ray_point_distance(ray: Ray, p: vec3f) -> f32 {
 }
 
 // Billboards: a quad (from `quad_corner`, 6 vertices) that covers a shape on
-// screen, for the impostor pattern above. Each one puts the shape in a sphere
-// and uses `sphere_billboard` (lib/camera.wgsl), so the quad can be a bit
-// larger than the shape: the fragment shader discards the pixels it misses.
+// screen, for the impostor pattern above. Most put the shape in a sphere and use
+// `sphere_billboard` (lib/camera.wgsl), so the quad can be a bit larger than the
+// shape: the fragment shader discards the pixels it misses. Capsules and cylinders
+// use `tube_billboard`, which fits long, thin shapes much more tightly.
 // For a sphere itself, use `sphere_billboard` directly.
 
 fn box_billboard(box_min: vec3f, box_max: vec3f, corner: vec2f) -> vec4f {
@@ -163,13 +164,82 @@ fn disk_billboard(center: vec3f, r: f32, corner: vec2f) -> vec4f {
     return sphere_billboard(center, r, corner);
 }
 
-fn capsule_billboard(a: vec3f, b: vec3f, r: f32, corner: vec2f) -> vec4f {
-    return sphere_billboard(0.5 * (a + b), 0.5 * length(b - a) + r, corner);
+// A tight quad around a tube: spheres of radius `ra` at `a` and `rb` at `b`, and the cone
+// that connects them (a "rounded cone"). After Groß & Gumhold, "Advanced Rendering of Line
+// Data with Ambient Occlusion and Transparency" (IEEE TVCG, 2021).
+//
+// The quad lies in the plane through the tube's axis that faces the eye. Across the tube it
+// is as wide as the end spheres look (`sphere_billboard`); along the tube it runs from the
+// outline of one end sphere to the outline of the other.
+fn tube_billboard(a: vec3f, b: vec3f, ra: f32, rb: f32, corner: vec2f) -> vec4f {
+    let forward = -vec3f(globals.view[0].z, globals.view[1].z, globals.view[2].z); // camera looks along this
+    let orthographic = globals.orthographic != 0u;
+
+    // From each end towards the eye (in orthographic views, the same for every point).
+    let to_eye_a = select(globals.eye - a, -forward, orthographic);
+    let to_eye_b = select(globals.eye - b, -forward, orthographic);
+    let la = length(to_eye_a);
+    let lb = length(to_eye_b);
+    // How much larger than its radius each end sphere looks, per unit of distance: seen from
+    // distance l, a sphere of radius r covers a circle of radius l * s (see `sphere_billboard`).
+    let sa = select(ra / sqrt(max(la * la - ra * ra, 1e-12)), ra, orthographic);
+    let sb = select(rb / sqrt(max(lb * lb - rb * rb, 1e-12)), rb, orthographic);
+
+    // `across`: perpendicular to the tube and to the eye, so across the tube on screen.
+    var across = cross(b - a, to_eye_a);
+    if (dot(across, across) < 1e-12) { // looking straight down the tube: any perpendicular
+        let helper = select(vec3f(0.0, 1.0, 0.0), vec3f(1.0, 0.0, 0.0), abs(normalize(to_eye_a).y) > 0.99);
+        across = cross(helper, to_eye_a);
+    }
+    across = normalize(across);
+    // In the quad's plane, perpendicular to the view ray to each end: the end sphere's outline
+    // reaches l * s along these, both ways.
+    let up_a = normalize(cross(across, to_eye_a));
+    let up_b = normalize(cross(across, to_eye_b));
+    let a_plus = a + la * sa * up_a;
+    let a_minus = a - la * sa * up_a;
+    let b_plus = b + lb * sb * up_b;
+    let b_minus = b - lb * sb * up_b;
+
+    // Along the tube on screen: which of those outline points is the first and the last.
+    let along = cross(across, forward);
+    let s = max(sa, sb);
+    var start = b_plus;
+    var start_width = lb * s;
+    if (screen_along(a_plus, along) <= screen_along(b_plus, along)) {
+        start = a_plus;
+        start_width = la * s;
+    }
+    var end = a_minus;
+    var end_width = la * s;
+    if (screen_along(a_minus, along) <= screen_along(b_minus, along)) {
+        end = b_minus;
+        end_width = lb * s;
+    }
+
+    // corner.x: -1 at the start, 1 at the end. corner.y: -1 .. 1 across.
+    var world = end + across * corner.y * end_width;
+    if (corner.x < 0.0) {
+        world = start + across * corner.y * start_width;
+    }
+    return globals.view_proj * vec4f(world, 1.0);
 }
 
+// Where `p` is on screen along `direction`, for comparing points in `tube_billboard`.
+fn screen_along(p: vec3f, direction: vec3f) -> f32 {
+    if (globals.orthographic != 0u) {
+        return dot(p, direction);
+    }
+    return dot(normalize(p - globals.eye), direction);
+}
+
+fn capsule_billboard(a: vec3f, b: vec3f, r: f32, corner: vec2f) -> vec4f {
+    return tube_billboard(a, b, r, r, corner);
+}
+
+// A capped cylinder fits inside the capsule of the same radius.
 fn cylinder_billboard(a: vec3f, b: vec3f, r: f32, corner: vec2f) -> vec4f {
-    let half_length = 0.5 * length(b - a);
-    return sphere_billboard(0.5 * (a + b), sqrt(half_length * half_length + r * r), corner);
+    return tube_billboard(a, b, r, r, corner);
 }
 
 fn ellipsoid_billboard(center: vec3f, radii: vec3f, corner: vec2f) -> vec4f {

@@ -4,6 +4,7 @@
 // plus a force towards (or away from) the mouse.
 #import "types.wgsl"
 #import "lib/globals.wgsl"
+#import "lib/random.wgsl"
 
 @group(0) @binding(0) var<uniform> globals: Globals;
 @group(0) @binding(1) var<uniform> params: Params;
@@ -54,8 +55,11 @@ fn main(@builtin(global_invocation_id) id: vec3u) {
     // The mouse: `mouse_force` > 0 attracts, < 0 repels (set from main.rs).
     if (mouse_down(MOUSE_LEFT)) {
         let to_mouse = wrapped(mouse_on_plane(0.0).xy - me.pos);
-        force += normalize(to_mouse) * params.mouse_force / (0.2 + length(to_mouse));
+        force += normalize(to_mouse) * params.mouse_force / (0.2 + dot(to_mouse, to_mouse));
     }
+
+    // Add force in each boid's random preferred direction
+    force += params.random * (rand2(id.x) - 0.5);
 
     me.vel += force * globals.dt * 60.0;
     let speed = length(me.vel);

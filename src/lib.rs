@@ -37,6 +37,10 @@ pub trait App: Sized + 'static {
     /// It is `async` so it can `.await` file loading, which is a download on the web.
     async fn new(ctx: &mut Context) -> Self;
 
+    /// Native only: when a shader changes, `new` runs again and replaces the app.
+    /// Copy over from `old` what should survive the reload, e.g. the slider values.
+    fn reloaded(&mut self, _old: &Self) {}
+
     /// Add your own sliders and buttons to the side panel.
     fn ui(&mut self, _ctx: &mut Context, _ui: &mut egui::Ui) {}
 

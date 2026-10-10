@@ -1,7 +1,8 @@
 // Step 2: Write a Shader
 //
 // Nodes: a camera-facing quad per node, with an exact ray-sphere intersection
-// in the fragment shader (a sphere "impostor").
+// in the fragment shader (a sphere "impostor"). The fragment shader runs once per
+// MSAA sample, so the sphere's outline is anti-aliased.
 #import "types.wgsl"
 #import "lib/globals.wgsl"
 #import "lib/math.wgsl"
@@ -12,6 +13,7 @@
 @group(0) @binding(0) var<uniform> globals: Globals;
 @group(0) @binding(1) var<storage, read> nodes: array<Node>;
 @group(0) @binding(2) var<storage, read> pick: u32;
+@group(0) @binding(3) var<uniform> params: Params;
 
 struct VertexOutput {
     @builtin(position) position: vec4f,
@@ -23,7 +25,7 @@ fn vs(@builtin(vertex_index) vertex: u32, @builtin(instance_index) instance: u32
     let node = nodes[instance];
     var out: VertexOutput;
     // A quad that covers the sphere on screen (see lib/camera.wgsl).
-    out.position = sphere_billboard(node.pos, node.radius, quad_corner(vertex));
+    out.position = sphere_billboard(node.pos, node.radius * params.node_radius, quad_corner(vertex));
     out.node = instance;
     return out;
 }
@@ -34,11 +36,12 @@ struct FragmentOutput {
 }
 
 @fragment
-fn fs(in: VertexOutput) -> FragmentOutput {
+fn fs(in: VertexOutput, @builtin(sample_index) sample: u32) -> FragmentOutput {
     let node = nodes[in.node];
-    let ray = camera_ray(in.position.xy);
+    // Shoot a ray through this sample (not the pixel center).
+    let ray = camera_ray(sample_position_4x(in.position.xy, sample));
 
-    let t = ray_sphere(ray, node.pos, node.radius);
+    let t = ray_sphere(ray, node.pos, node.radius * params.node_radius);
     if (t < 0.0) {
         discard; // the ray misses the sphere
     }

@@ -192,6 +192,11 @@ impl App for Timeseries {
         }
     }
 
+    // Keep the slider values when a shader is hot reloaded.
+    fn reloaded(&mut self, old: &Self) {
+        self.params = old.params;
+    }
+
     // ---------------------------------------------------------------
     // Step 5: Dispatch the shader!
     // ---------------------------------------------------------------

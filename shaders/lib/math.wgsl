@@ -30,3 +30,13 @@ fn fullscreen_triangle(vertex_index: u32) -> vec4f {
     let uv = vec2f(f32((vertex_index << 1u) & 2u), f32(vertex_index & 2u));
     return vec4f(uv * 2.0 - 1.0, 0.0, 1.0);
 }
+
+// Per-sample shading with 4x MSAA: a fragment shader that takes `@builtin(sample_index)`
+// runs once per sample instead of once per pixel. This is where that sample is, in pixels
+// (pass `@builtin(position).xy`), using WebGPU's standard 4x sample positions.
+fn sample_position_4x(frag_coord: vec2f, sample_index: u32) -> vec2f {
+    var offsets = array<vec2f, 4>(
+        vec2f(0.375, 0.125), vec2f(0.875, 0.375), vec2f(0.125, 0.625), vec2f(0.625, 0.875),
+    );
+    return floor(frag_coord) + offsets[sample_index % 4u];
+}

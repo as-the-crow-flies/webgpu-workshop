@@ -21,7 +21,7 @@ The following examples can be found in webgpu-workshop/examples
 | `template`   | `points.npy`                 | The starting point: data → buffer → quads (parts 1 and 2)      |
 | `gravity` | `bodies.npy`        | The same, plus a ping-pong compute simulation: gravity (part 3) |
 | `timeseries` | `timeseries.npy`             | 2D view, anti-aliased lines, hover readout                     |
-| `graph`      | `nodes.npy`, `edges.npy`     | Two buffers, force-directed layout, dragging nodes, sphere impostors |
+| `graph`      | `nodes.npy`, `edges.npy`     | Two buffers, force-directed layout, dragging nodes, sphere and cylinder impostors, 4x MSAA |
 | `boids`      | generated on the GPU         | Flocking simulation, mouse interaction                         |
 | `life`       | generated on the GPU         | Game of Life on a grid, painting with the mouse                |
 | `mandelbrot` | computed in the shader       | The simplest example: one full-screen quad, all the work in the fragment shader |
@@ -447,7 +447,7 @@ Import with `#import "lib/<file>.wgsl"`.
 | `sdf2d.wgsl`     | `sd_circle`, `sd_box`, `sd_round_box`, `sd_segment`, `sd_triangle`, `sd_ring`, `smooth_min` |
 | `sdf3d.wgsl`     | `sd_sphere`, `sd_box3`, `sd_round_box3`, `sd_capsule`, `sd_torus`, `sd_cylinder`, `sd_plane`, `smooth_min3` |
 | `intersect.wgsl` | `ray_sphere`, `ray_box`, `ray_plane`, `ray_disk`, `ray_capsule`, `ray_cylinder`, `ray_ellipsoid`, `ray_triangle`, normals, `ray_point_distance` |
-| | Billboards (a quad covering the shape on screen): `box_billboard`, `disk_billboard`, `capsule_billboard`, `cylinder_billboard`, `ellipsoid_billboard`, `triangle_billboard` |
+| | Billboards (a quad covering the shape on screen): `box_billboard`, `disk_billboard`, `capsule_billboard`, `cylinder_billboard`, `tube_billboard`, `ellipsoid_billboard`, `triangle_billboard` |
 | `aa.wgsl`        | `aa_fill`, `aa_stroke`, `aa_fill_px`, `over`                              |
 | `colormap.wgsl`  | `viridis`, `magma`, `plasma`, `coolwarm`, `category_color`                |
 | `volume.wgsl`    | `composite` (front-to-back), `step_alpha`                                 |
@@ -471,8 +471,16 @@ error: invalid field accessor `colour`
 
 While the app runs (natively), save a `.wgsl` file and the app reloads: `App::new` is
 called again with the new shaders. The camera stays where it is; everything else (sliders,
-simulation state) starts over. If the new shader doesn't compile, the error is shown in the
-window and the previous version keeps running until you fix it.
+simulation state) starts over, unless you copy it over from the old app in `App::reloaded`:
+
+```rust
+fn reloaded(&mut self, old: &Self) {
+    self.params = old.params;
+}
+```
+
+If the new shader doesn't compile, the error is shown in the window and the previous version
+keeps running until you fix it.
 
 Changes to Rust code still need a restart.
 

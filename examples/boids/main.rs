@@ -12,7 +12,7 @@
 use webgpu_workshop::{bytemuck, egui, glam, wgpu, App, Camera, Context};
 use wgpu::util::DeviceExt;
 
-const COUNT: u32 = 4096;
+const COUNT: u32 = 8 * 1024;
 
 /// The sliders. Must have the same layout as `struct Params` in types.wgsl.
 #[repr(C)]
@@ -24,6 +24,7 @@ struct Params {
     radius: f32,
     max_speed: f32,
     mouse_force: f32,
+    random: f32,
     seed: u32,
     size: f32,
 }
@@ -72,12 +73,13 @@ impl App for Boids {
 
         // The slider values, and a uniform buffer to send them to the GPU every frame.
         let params = Params {
-            separation: 0.05,
-            alignment: 0.05,
-            cohesion: 0.01,
-            radius: 0.15,
-            max_speed: 0.6,
+            separation: 0.02,
+            alignment: 0.12,
+            cohesion: 0.02,
+            radius: 0.2,
+            max_speed: 2.0,
             mouse_force: 0.05,
+            random: 0.05,
             seed: 0,
             size: 0.015,
         };
@@ -262,6 +264,11 @@ impl App for Boids {
         }
     }
 
+    // Keep the slider values when a shader is hot reloaded.
+    fn reloaded(&mut self, old: &Self) {
+        self.params = old.params;
+    }
+
     // ---------------------------------------------------------------
     // Step 5: Dispatch the shader!
     // ---------------------------------------------------------------
@@ -326,6 +333,7 @@ impl App for Boids {
         ui.add(egui::Slider::new(&mut p.cohesion, 0.0..=0.1).text("cohesion"));
         ui.add(egui::Slider::new(&mut p.radius, 0.01..=0.5).text("view radius"));
         ui.add(egui::Slider::new(&mut p.max_speed, 0.05..=2.0).text("max speed"));
+        ui.add(egui::Slider::new(&mut p.random, 0.0..=1.0).text("random"));
         ui.add(egui::Slider::new(&mut p.mouse_force, -0.2..=0.2).text("mouse force"));
         ui.add(egui::Slider::new(&mut p.size, 0.005..=0.05).text("size"));
         if ui.button("Reset").clicked() {

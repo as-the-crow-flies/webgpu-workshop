@@ -10,6 +10,7 @@
 @group(0) @binding(0) var<uniform> globals: Globals;
 @group(0) @binding(1) var<storage, read> nodes: array<Node>;
 @group(0) @binding(2) var<storage, read_write> pick: atomic<u32>;
+@group(0) @binding(3) var<uniform> params: Params;
 
 @compute @workgroup_size(64)
 fn main(@builtin(global_invocation_id) id: vec3u) {
@@ -19,7 +20,7 @@ fn main(@builtin(global_invocation_id) id: vec3u) {
     }
     let node = nodes[i];
     // A slightly larger sphere makes small nodes easier to grab.
-    let t = ray_sphere(mouse_ray(), node.pos, node.radius * 1.5);
+    let t = ray_sphere(mouse_ray(), node.pos, node.radius * params.node_radius * 1.5);
     if (t > 0.0) {
         // For positive floats, the bits sort in the same order as the values,
         // so the top 16 bits of `t` work as a (coarse) depth.

@@ -1,10 +1,12 @@
 // Step 2: Write a Shader
 //
-// Edges: one quad per edge, as a line of `line_width` pixels.
+// Edges: one quad per edge, drawn as a ray-traced cylinder (an "impostor", see lib/intersect.wgsl).
+// The fragment shader runs once per MSAA sample, so the cylinder's outline is anti-aliased.
 #import "types.wgsl"
 #import "lib/globals.wgsl"
 #import "lib/math.wgsl"
-#import "lib/sdf2d.wgsl"
+#import "lib/camera.wgsl"
+#import "lib/intersect.wgsl"
 
 @group(0) @binding(0) var<uniform> globals: Globals;
 @group(0) @binding(1) var<uniform> params: Params;
@@ -13,42 +15,36 @@
 
 struct VertexOutput {
     @builtin(position) position: vec4f,
-    @location(0) @interpolate(flat) a: vec2f,   // in pixels
-    @location(1) @interpolate(flat) b: vec2f,
-}
-
-// Clip position -> (pixel x, pixel y, depth).
-fn to_pixels(clip: vec4f) -> vec3f {
-    let ndc = clip.xyz / clip.w;
-    return vec3f(vec2f(ndc.x * 0.5 + 0.5, 0.5 - ndc.y * 0.5) * globals.resolution, ndc.z);
+    // The two ends of the cylinder (the centers of the two nodes), in world space.
+    @location(0) @interpolate(flat) a: vec3f,
+    @location(1) @interpolate(flat) b: vec3f,
 }
 
 @vertex
 fn vs(@builtin(vertex_index) vertex: u32, @builtin(instance_index) instance: u32) -> VertexOutput {
     let edge = edges[instance];
-    let a = to_pixels(globals.view_proj * vec4f(nodes[edge.a].pos, 1.0));
-    let b = to_pixels(globals.view_proj * vec4f(nodes[edge.b].pos, 1.0));
+    let a = nodes[edge.a].pos;
+    let b = nodes[edge.b].pos;
+    // A quad that covers the cylinder on screen (see lib/intersect.wgsl).
+    let position = cylinder_billboard(a, b, params.edge_radius, quad_corner(vertex));
+    return VertexOutput(position, a, b);
+}
 
-    let along = normalize(b.xy - a.xy + vec2f(1e-4, 0.0));
-    let across = vec2f(-along.y, along.x);
-    let r = 0.5 * params.line_width + 1.0;
-    let corner = quad_corner(vertex);
-    let f = corner.x * 0.5 + 0.5;
-    let pixel = mix(a.xy, b.xy, f) + along * corner.x * r + across * corner.y * r;
-
-    var out: VertexOutput;
-    let ndc = vec2f(pixel.x / globals.resolution.x * 2.0 - 1.0, 1.0 - pixel.y / globals.resolution.y * 2.0);
-    out.position = vec4f(ndc, mix(a.z, b.z, f), 1.0);
-    out.a = a.xy;
-    out.b = b.xy;
-    return out;
+// What the fragment shader returns: a color, and the depth to test and store.
+struct FragmentOutput {
+    @location(0) color: vec4f,
+    @builtin(frag_depth) depth: f32,
 }
 
 @fragment
-fn fs(in: VertexOutput) -> @location(0) vec4f {
-    // Distance (in pixels) from this pixel to the line; outside the line width: discard.
-    if (sd_segment(in.position.xy, in.a, in.b) > 0.5 * params.line_width) {
-        discard;
+fn fs(in: VertexOutput, @builtin(sample_index) sample: u32) -> FragmentOutput {
+    // Shoot a ray through this sample (not the pixel center) and intersect it with the cylinder.
+    let ray = camera_ray(sample_position_4x(in.position.xy, sample));
+    let hit = ray_cylinder(ray, in.a, in.b, params.edge_radius); // (t, normal)
+    if (hit.x < 0.0) {
+        discard; // the ray misses the cylinder
     }
-    return vec4f(vec3f(0.4), 1.0);
+    let point = ray.origin + hit.x * ray.dir;
+    let light = 0.3 + 0.7 * max(dot(hit.yzw, -ray.dir), 0.0); // lit from the camera
+    return FragmentOutput(vec4f(vec3f(0.5) * light, 1.0), depth_of(point));
 }

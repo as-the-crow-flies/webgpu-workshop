@@ -14,6 +14,7 @@ struct Params {
     radius: f32,       // how far a boid can see
     max_speed: f32,
     mouse_force: f32,  // pull towards the mouse while the left button is down (negative: push away)
+    random: f32,       // add random movement
     seed: u32,         // changes on "Reset"
     size: f32,         // drawing size
 }
