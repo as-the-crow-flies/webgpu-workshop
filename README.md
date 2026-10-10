@@ -24,6 +24,7 @@ The following examples can be found in webgpu-workshop/examples
 | `graph`      | `nodes.npy`, `edges.npy`     | Two buffers, force-directed layout, dragging nodes, sphere impostors |
 | `boids`      | generated on the GPU         | Flocking simulation, mouse interaction                         |
 | `life`       | generated on the GPU         | Game of Life on a grid, painting with the mouse                |
+| `mandelbrot` | computed in the shader       | The simplest example: one full-screen quad, all the work in the fragment shader |
 | `volume`     | `particles.npy`              | Splatting particles into a 3D texture, volume rendering        |
 
 Every example folder looks like this:

@@ -18,6 +18,9 @@ mod gravity;
 #[path = "../examples/life/main.rs"]
 mod life;
 #[allow(dead_code)]
+#[path = "../examples/mandelbrot/main.rs"]
+mod mandelbrot;
+#[allow(dead_code)]
 #[path = "../examples/template/main.rs"]
 mod template;
 #[allow(dead_code)]
@@ -42,6 +45,7 @@ pub fn start() {
         "graph" => crate::run::<graph::Graph>(),
         "boids" => crate::run::<boids::Boids>(),
         "life" => crate::run::<life::Life>(),
+        "mandelbrot" => crate::run::<mandelbrot::Mandelbrot>(),
         "volume" => crate::run::<volume::Volume>(),
         other => show_message(&format!("unknown example '{other}'")),
     }
